@@ -32,12 +32,30 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core import Settings
 from llama_index.llms.vllm import Vllm
 
-llm = Vllm(
+### OFFLINE MODEL
+# llm = Vllm(
+#     model="mistralai/Mistral-7B-Instruct-v0.3",
+#     dtype="float16",
+#     tensor_parallel_size=1,
+#     temperature=0,
+#     max_new_tokens=100,
+#     vllm_kwargs={
+#         "swap_space": 1,
+#         "gpu_memory_utilization": 0.8,
+#         "max_model_len": 4096,
+#     },
+# )
+
+### ONLINE MODEL
+from llama_index.llms.vllm import VllmServer
+from llama_index.core.llms import ChatMessage
+import json
+
+llm = VllmServer(
+    api_url="http://localhost:5000/generate", max_new_tokens=10, temperature=0,
     model="mistralai/Mistral-7B-Instruct-v0.3",
     dtype="float16",
     tensor_parallel_size=1,
-    temperature=0,
-    max_new_tokens=100,
     vllm_kwargs={
         "swap_space": 1,
         "gpu_memory_utilization": 0.8,
@@ -83,10 +101,10 @@ def convert_to_txt_documents(json_file, save_path):
         full_text = '\n'.join(texts)
         f.write(full_text)
 
-def get_query(query_dir):
+def get_queries(query_dir, num_requests=200):
     count = 0
     query_list = []
-    for i in range(count, 200):
+    for i in range(count, num_requests):
         file = str(count) + '.json'
         with open(query_dir + file, 'r') as f:
             query = f.read()
@@ -94,10 +112,10 @@ def get_query(query_dir):
             query_list.append(query)
     return query_list
 
-def get_answers(answers_dir):
+def get_answers(answers_dir, num_requests=200):
     count = 0
     answers_list = []
-    for i in range(count, 200):
+    for i in range(count, num_requests):
         file = str(count) + '.json'
         with open(answers_dir + file, 'r') as f:
             answers = f.read()
@@ -141,7 +159,7 @@ def main():
             vector_store=vector_store, persist_dir="./storage", 
         )
         index = load_index_from_storage(storage_context=storage_context,    
-                        similarity_top_k=10)  
+                        similarity_top_k=1)  
 
     response_synthesizer = get_response_synthesizer(response_mode="compact")
     query_engine = index.as_query_engine(llm = llm, response_synthesizer=response_synthesizer)
@@ -156,8 +174,8 @@ def main():
     prompts_dict_new = query_engine.get_prompts()
     logging.info("New prompt: %s", prompts_dict_new)
 
-    query_list = get_query(query_path)
-    answers_list = get_answers(answers_path)
+    query_list = get_queries(query_path, 5)
+    answers_list = get_answers(answers_path, 5)
 
     assert len(query_list) == len(answers_list)
 
