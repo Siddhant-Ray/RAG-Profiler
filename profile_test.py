@@ -32,7 +32,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core import Settings
 from llama_index.llms.vllm import Vllm
 
-### OFFLINE MODEL
+# ### OFFLINE MODEL
 # llm = Vllm(
 #     model="mistralai/Mistral-7B-Instruct-v0.3",
 #     dtype="float16",
@@ -122,7 +122,16 @@ def get_answers(answers_dir, num_requests=200):
             count += 1
             answers_list.append(answers)
     return answers_list
-        
+
+def parser_answer(text):
+    import re
+    # Keep only the last line 
+    text = text.split('\n')[-1]
+    # Keep onluy text after "Answer: "
+    text = re.sub(r'Answer: ', '', text).strip()
+    return text
+    
+    
 def main():
 
     query_path = 'data/musique/queries_200/'
@@ -184,7 +193,9 @@ def main():
         with open('outputs/musique.csv', 'a') as f:
             answer = answers_list[idx]
             answer = json.loads(answer)['answer']
-            f.write(f"{str(response)};{answer}\n")
+
+            response = parser_answer(str(response))
+            f.write(f"{response};{answer}\n")
            
 
 if __name__ == '__main__':

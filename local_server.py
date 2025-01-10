@@ -38,6 +38,7 @@ async def generate(request: Request) -> Response:
     """
     request_dict = await request.json()
     prompt = request_dict.pop("prompt")
+    print(prompt)
     stream = request_dict.pop("stream", False)
     # Treats the additional arguments to request_dict as sampling arguments
     sampling_params = SamplingParams(**request_dict)
