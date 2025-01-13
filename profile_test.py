@@ -112,27 +112,31 @@ def convert_to_txt_documents(json_file, save_path):
 
 def get_queries(query_dir, num_requests=200):
     query_list = []
+    count = 0
     for i in range(count, num_requests):
         file = str(count) + '.json'
         with open(query_dir + file, 'r') as f:
             query = f.read()
             query_list.append(query)
+        count+=1
     return query_list
 
 def get_answers(answers_dir, num_requests=200):
     answers_list = []
+    count = 0
     for i in range(count, num_requests):
         file = str(count) + '.json'
         with open(answers_dir + file, 'r') as f:
             answers = f.read()
             answers_list.append(answers)
+        count+=1
     return answers_list
 
 def parser_answer(text):
     import re
     # Keep only the last line 
     text = text.split('\n')[-1]
-    # Keep onluy text after "Answer: "
+    # Keep only text after "Answer: "
     text = re.sub(r'Answer: ', '', text).strip()
     return text
     
