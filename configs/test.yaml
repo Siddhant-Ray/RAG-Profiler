@@ -1,0 +1,4 @@
+chunk_size: 512
+chunk_overlap: 0
+embedding_dim: 384
+similarity_top_k: 10

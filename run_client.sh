@@ -10,5 +10,5 @@ export TOKENIZERS_PARALLELISM=false
 
 # Use the arguments from bash directly using $@
 
-LD_LIBRARY_PATH=/dataheart/siddhantray/lmcache_docs/rag_profiler/venv_rag_pf/lib/python3.12/site-packages/nvidia/nvjitlink/lib/:$LD_LIBRARY_PATH
+LD_LIBRARY_PATH=/dataheart/siddhantray/lmcache_docs/rag_profiler/venv_test_req/lib/python3.12/site-packages/nvidia/nvjitlink/lib/:$LD_LIBRARY_PATH
 python profile_test.py $@

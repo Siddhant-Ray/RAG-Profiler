@@ -1,6 +1,7 @@
 import logging
 import sys, json, os
 import pathlib
+import yaml
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
@@ -12,8 +13,14 @@ login(os.environ["HF_TOKEN"])
 
 import faiss
 
+# Test yaml
+# Refactor later
+config_path = "configs/test.yaml"
+with open(config_path, "r") as f:
+    config = yaml.safe_load(f)
+
 # dimensions of "all-MiniLM-L6-v2"
-d = 384
+d = config['embedding_dim']
 faiss_index = faiss.IndexFlatL2(d)
 
 from llama_index.core import (
@@ -25,6 +32,9 @@ from llama_index.core import (
     get_response_synthesizer,
     PromptTemplate,
 )
+
+from llama_index.core import PromptHelper
+
 from llama_index.vector_stores.faiss import FaissVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 
@@ -59,7 +69,7 @@ llm = VllmServer(
     vllm_kwargs={
         "swap_space": 1,
         "gpu_memory_utilization": 0.8,
-        "max_model_len": 4096,
+        # "max_model_len": 4096,
     },
 )
 
@@ -67,11 +77,10 @@ llm = VllmServer(
 Settings.embed_model = HuggingFaceEmbedding(
     model_name="all-MiniLM-L6-v2")
 Settings.llm = llm
-Settings.chunk_size = 512
-Settings.chunk_overlap = 0
+Settings.chunk_size = config['chunk_size']
+Settings.chunk_overlap = config['chunk_overlap']
 
 # Prompt template
-
 new_qa_tmpl_str = (
     "Context information is below.\n"
     "---------------------\n"
@@ -102,24 +111,20 @@ def convert_to_txt_documents(json_file, save_path):
         f.write(full_text)
 
 def get_queries(query_dir, num_requests=200):
-    count = 0
     query_list = []
     for i in range(count, num_requests):
         file = str(count) + '.json'
         with open(query_dir + file, 'r') as f:
             query = f.read()
-            count += 1
             query_list.append(query)
     return query_list
 
 def get_answers(answers_dir, num_requests=200):
-    count = 0
     answers_list = []
     for i in range(count, num_requests):
         file = str(count) + '.json'
         with open(answers_dir + file, 'r') as f:
             answers = f.read()
-            count += 1
             answers_list.append(answers)
     return answers_list
 
@@ -168,20 +173,24 @@ def main():
             vector_store=vector_store, persist_dir="./storage", 
         )
         index = load_index_from_storage(storage_context=storage_context,    
-                        similarity_top_k=1)  
+                        similarity_top_k= config['similarity_top_k'],)
 
-    response_synthesizer = get_response_synthesizer(response_mode="compact")
-    query_engine = index.as_query_engine(llm = llm, response_synthesizer=response_synthesizer)
+    prompt_helper = PromptHelper(context_window=32786,) # for Mistral as default is 3900
+    response_synthesizer = get_response_synthesizer(response_mode="compact", prompt_helper=prompt_helper)
+
+    
+    query_engine = index.as_query_engine(llm = llm, response_synthesizer=response_synthesizer, 
+                                        similarity_top_k= config['similarity_top_k'],)
 
     prompts_dict_old = query_engine.get_prompts()
-    logging.info("Old prompt: %s", prompts_dict_old)
+    logging.debug("Old prompt: %s", prompts_dict_old)
 
     query_engine.update_prompts(
         {"response_synthesizer:text_qa_template": new_qa_tmpl}
     )
 
     prompts_dict_new = query_engine.get_prompts()
-    logging.info("New prompt: %s", prompts_dict_new)
+    logging.debug("New prompt: %s", prompts_dict_new)
 
     query_list = get_queries(query_path, 5)
     answers_list = get_answers(answers_path, 5)
