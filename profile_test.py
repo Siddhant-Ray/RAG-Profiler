@@ -42,6 +42,8 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.core import Settings
 from llama_index.llms.vllm import Vllm
 
+from utils import Scorer
+
 # ### OFFLINE MODEL
 # llm = Vllm(
 #     model="mistralai/Mistral-7B-Instruct-v0.3",
@@ -165,7 +167,7 @@ def main():
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
         index = VectorStoreIndex.from_documents(
-            documents, storage_context=storage_context,
+            documents, storage_context=storage_context, metric="euclidean",
         )
         logging.info("Index built")
 
@@ -177,7 +179,8 @@ def main():
             vector_store=vector_store, persist_dir="./storage", 
         )
         index = load_index_from_storage(storage_context=storage_context,    
-                        similarity_top_k= config['similarity_top_k'],)
+                        similarity_top_k= config['similarity_top_k'], metric="euclidean",
+                        )
 
     prompt_helper = PromptHelper(context_window=32786,) # for Mistral as default is 3900
     response_synthesizer = get_response_synthesizer(response_mode="compact", prompt_helper=prompt_helper)
@@ -196,8 +199,8 @@ def main():
     prompts_dict_new = query_engine.get_prompts()
     logging.debug("New prompt: %s", prompts_dict_new)
 
-    query_list = get_queries(query_path, 5)
-    answers_list = get_answers(answers_path, 5)
+    query_list = get_queries(query_path, 100)
+    answers_list = get_answers(answers_path, 100)
 
     assert len(query_list) == len(answers_list)
 
@@ -209,7 +212,26 @@ def main():
 
             response = parser_answer(str(response))
             f.write(f"{response};{answer}\n")
-           
+
+    logging.info("Done")
+    F1scorer = Scorer(metric='f1')
+
+    import pandas as pd, numpy as np
+    df = pd.read_csv('outputs/musique.csv', sep=';', header=None)
+    df.columns = ['response', 'answer']
+
+    gt = df['answer'].values
+    pred = df['response'].values
+
+    assert len(gt) == len(pred)
+
+    scores = []
+    for i in range(len(gt)):
+        score = F1scorer.compute_f1(pred[i], gt[i])
+        scores.append(score)
+
+    
+    logging.info(f"F1 Score: {np.mean(scores)}")
 
 if __name__ == '__main__':
     main()

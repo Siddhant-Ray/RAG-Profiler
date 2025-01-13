@@ -3,8 +3,8 @@ import numpy as np
 import argparse
 from rouge_score import rouge_scorer
 
-class F1Scorer:
-    def _init(self, metric="f1"):
+class Scorer:
+    def __init__(self, metric="f1"):
         self.metric = metric
 
     def normalize_text(self, s):
