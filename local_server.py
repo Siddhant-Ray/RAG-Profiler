@@ -16,10 +16,15 @@ from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
 from vllm.sampling_params import SamplingParams
 from vllm.utils import random_uuid
+import yaml
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 app = FastAPI()
 engine = None
+
+config_path = "configs/central.yaml"
+with open(config_path, "r") as f:
+    config = yaml.safe_load(f)
 
 @app.get("/alive")
 async def alive() -> Response:
@@ -78,7 +83,7 @@ async def generate(request: Request) -> Response:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default=None)
-    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--port", type=int, default=config['port'])
     parser.add_argument("--root-path", type=str, default=None)
     # defaults to model = facebook/opt-125m
     parser = AsyncEngineArgs.add_cli_args(parser)

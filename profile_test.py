@@ -15,7 +15,7 @@ import faiss
 
 # Test yaml
 # Refactor later
-config_path = "configs/test.yaml"
+config_path = "configs/central.yaml"
 with open(config_path, "r") as f:
     config = yaml.safe_load(f)
 
@@ -62,7 +62,7 @@ from llama_index.core.llms import ChatMessage
 import json
 
 llm = VllmServer(
-    api_url="http://localhost:5000/generate", max_new_tokens=10, temperature=0,
+    api_url=f"http://localhost:{config['port']}/generate", max_new_tokens=10, temperature=0,
     model="mistralai/Mistral-7B-Instruct-v0.3",
     dtype="float16",
     tensor_parallel_size=1,
@@ -75,7 +75,7 @@ llm = VllmServer(
 
 # Core settings 
 Settings.embed_model = HuggingFaceEmbedding(
-    model_name="all-MiniLM-L6-v2")
+    model_name=config['embed_model'])
 Settings.llm = llm
 Settings.chunk_size = config['chunk_size']
 Settings.chunk_overlap = config['chunk_overlap']
