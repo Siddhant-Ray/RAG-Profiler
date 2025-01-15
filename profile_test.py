@@ -63,17 +63,22 @@ from llama_index.llms.vllm import VllmServer
 from llama_index.core.llms import ChatMessage
 import json
 
-llm = VllmServer(
-    api_url=f"http://localhost:{config['port']}/generate", max_new_tokens=10, temperature=0,
-    model="mistralai/Mistral-7B-Instruct-v0.3",
-    dtype="float16",
-    tensor_parallel_size=1,
-    vllm_kwargs={
-        "swap_space": 1,
-        "gpu_memory_utilization": 0.8,
-        # "max_model_len": 4096,
-    },
-)
+# llm = VllmServer(
+#     api_url=f"http://localhost:{config['port']}/generate", max_new_tokens=10, temperature=0,
+#     model="mistralai/Mistral-7B-Instruct-v0.3",
+#     dtype="float16",
+#     tensor_parallel_size=1,
+#     vllm_kwargs={
+#         "swap_space": 1,
+#         "gpu_memory_utilization": 0.8,
+#         # "max_model_len": 4096,
+#     },
+# )
+
+from llama_index.llms.openai_like import OpenAILike
+llm = OpenAILike(model="mistralai/Mistral-7B-Instruct-v0.3", 
+            api_base=f"http://localhost:{config['port']}/v1", api_key="fake")
+
 
 # Core settings 
 Settings.embed_model = HuggingFaceEmbedding(
