@@ -1,0 +1,5 @@
+chunk_size: 512
+local_device: cpu
+pipelined_backend: True
+save_decode_cache: True
+enable_blending: True

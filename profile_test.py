@@ -2,6 +2,7 @@ import logging
 import sys, json, os
 import pathlib
 import yaml
+import time
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
@@ -12,6 +13,7 @@ from huggingface_hub import login
 login(os.environ["HF_TOKEN"])
 
 import faiss
+import pandas as pd, numpy as np
 
 # Test yaml
 # Refactor later
@@ -145,8 +147,28 @@ def parser_answer(text):
     text = text.split('\n')[-1]
     # Keep only text after "Answer: "
     text = re.sub(r'Answer: ', '', text).strip()
-    return text
-    
+    return text    
+
+def get_ttft_from_query_engine(query_engine, query):
+
+    start_time = time.time()
+
+    # Variable to store the time of the first token
+    first_token_time = None
+
+    # Execute the query and process the output stream
+    response = query_engine.query(query)
+
+    for token in response.response_gen:
+        # Check if the token is not empty
+        if token.strip():  # Ensure the token is not empty or just whitespace
+            if first_token_time is None:
+                first_token_time = time.time()  # Capture time of the first token
+            print(token, end="")  # Stream tokens to the console
+
+    # Calculate TTFT
+    ttft = first_token_time - start_time if first_token_time else None
+    return ttft, response
     
 def main():
 
@@ -188,11 +210,19 @@ def main():
                         )
 
     prompt_helper = PromptHelper(context_window=32786,) # for Mistral as default is 3900
-    response_synthesizer = get_response_synthesizer(response_mode="compact", prompt_helper=prompt_helper)
+    response_synthesizer = get_response_synthesizer(response_mode="compact", prompt_helper=prompt_helper,
+                                    streaming=True,)
 
+    ## DEBUGGING
+
+    # # Get all texts
+    # nodes = list(index.storage_context.docstore.docs.values())
+    # texts = [node.text for node in nodes]
+    # import pdb; pdb.set_trace()
     
     query_engine = index.as_query_engine(llm = llm, response_synthesizer=response_synthesizer, 
-                                        similarity_top_k= config['similarity_top_k'],)
+                                        similarity_top_k= config['similarity_top_k'],
+                                        streaming=True,)
 
     prompts_dict_old = query_engine.get_prompts()
     logging.debug("Old prompt: %s", prompts_dict_old)
@@ -209,21 +239,43 @@ def main():
 
     assert len(query_list) == len(answers_list)
 
-    for idx, query in enumerate(query_list):
-        response = query_engine.query(query)
+    lambda_poisson = 20
+    num_events = len(query_list)
+
+    for idx, event in enumerate(range(num_events)):
+        start = time.time()
+        time_interval = np.random.exponential(1 / lambda_poisson) 
+
+        response = query_engine.query(query_list[idx])
+
+        # for text in response.response_gen:
+        #     if text is not None:
+        #         if text != "":
+        #             first_token_time = time.time()
+        #             yield first_token_time, text
+                
+        # response.print_response_stream()
+
+        end = time.time()
+        # ttft, response = get_ttft_from_query_engine(query_engine, query_list[idx])
+
+        # logging.info(f"Time taken: {end - start} seconds")
+        # logging.info(f"TTFT: {ttft} seconds")
+
         with open('outputs/musique.csv', 'a') as f:
             answer = answers_list[idx]
             answer = json.loads(answer)['answer']
 
             response = parser_answer(str(response))
-            f.write(f"{response};{answer}\n")
+            f.write(f"{response};{answer};{end-start}\n")
+
+        time.sleep(time_interval)
 
     logging.info("Done")
     F1scorer = Scorer(metric='f1')
 
-    import pandas as pd, numpy as np
     df = pd.read_csv('outputs/musique.csv', sep=';', header=None)
-    df.columns = ['response', 'answer']
+    df.columns = ['response', 'answer', 'time']
 
     gt = df['answer'].values
     pred = df['response'].values
