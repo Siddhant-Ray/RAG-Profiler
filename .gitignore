@@ -170,6 +170,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# yaml config
+configs/central.yaml
+
 # Shell scripts
 /run_server.sh
 /run_client.sh
