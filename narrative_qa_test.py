@@ -5,28 +5,21 @@ import yaml
 import time
 from datasets import load_dataset
 import requests
-
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
-
-os.environ["HF_TOKEN"] = "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"
-
 from huggingface_hub import login
-login(os.environ["HF_TOKEN"])
-
 import faiss
 import pandas as pd, numpy as np
-
-# Test yaml
-# Refactor later
-config_path = "configs/central.yaml"
-with open(config_path, "r") as f:
-    config = yaml.safe_load(f)
-
-# dimensions of "all-MiniLM-L6-v2"
-d = config['embedding_dim']
-faiss_index = faiss.IndexFlatL2(d)
-
+from llama_index.core import PromptHelper
+from llama_index.vector_stores.faiss import FaissVectorStore
+from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+# Set the model to use
+from llama_index.core import Settings
+from llama_index.llms.vllm import Vllm
+from utils import Scorer
+### ONLINE MODEL
+from llama_index.llms.vllm import VllmServer
+from llama_index.core.llms import ChatMessage
+import json
+from llama_index.llms.openai_like import OpenAILike
 from llama_index.core import (
     SimpleDirectoryReader,
     load_index_from_storage,
@@ -38,26 +31,21 @@ from llama_index.core import (
     Document
 )
 
-from llama_index.core import PromptHelper
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
+login(os.environ["HF_TOKEN"])
+# Test yaml
 
-from llama_index.vector_stores.faiss import FaissVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+# Refactor later
+config_path = "configs/central.yaml"
+with open(config_path, "r") as f:
+    config = yaml.safe_load(f)
 
-# Set the model to use
-from llama_index.core import Settings
-from llama_index.llms.vllm import Vllm
-
-from utils import Scorer
-
-### ONLINE MODEL
-from llama_index.llms.vllm import VllmServer
-from llama_index.core.llms import ChatMessage
-import json
-
-from llama_index.llms.openai_like import OpenAILike
+# dimensions of "all-MiniLM-L6-v2"
+d = config['embedding_dim']
+faiss_index = faiss.IndexFlatL2(d)
 llm = OpenAILike(model="mistralai/Mistral-7B-Instruct-v0.3", 
             api_base=f"http://localhost:{config['port']}/v1", api_key="fake")
-
 
 # Core settings 
 Settings.embed_model = HuggingFaceEmbedding(
@@ -65,7 +53,6 @@ Settings.embed_model = HuggingFaceEmbedding(
 Settings.llm = llm
 Settings.chunk_size = config['chunk_size']
 Settings.chunk_overlap = config['chunk_overlap']
-
 # Prompt template
 new_qa_tmpl_str = (
     "Context information is below.\n"
@@ -103,8 +90,8 @@ def get_ttft_from_query_engine(query_engine, query):
     return ttft
     
 def main():
-    ds = load_dataset("deepmind/narrativeqa", cache_dir = "/dataheart/lwtucker/hf_models/cache/datasets")
-    num_docs = 100
+    ds = load_dataset("deepmind/narrativeqa", cache_dir = config["cache_dir"])
+    num_docs = config["num_docs"]
 
     documents = []
     for document_idx in range(num_docs):
@@ -112,50 +99,28 @@ def main():
         documents.append(Document(text = document_txt))
 
     logging.info("Loaded %d documents", len(documents))
-
-    if not os.path.exists("./storage_qa"):
-        os.makedirs("./storage_qa")
-        vector_store = FaissVectorStore(faiss_index=faiss_index)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-        index = VectorStoreIndex.from_documents(
+    vector_store = FaissVectorStore(faiss_index=faiss_index)
+    storage_context = StorageContext.from_defaults(vector_store=vector_store)
+    index = VectorStoreIndex.from_documents(
             documents, storage_context=storage_context, metric="euclidean",
         )
-        logging.info("Index built")
-
-        index.storage_context.persist()
-    
-    else:
-        vector_store = FaissVectorStore.from_persist_dir("./storage_qa")
-        storage_context = StorageContext.from_defaults(
-            vector_store=vector_store, persist_dir="./storage_qa", 
-        )
-        index = load_index_from_storage(storage_context=storage_context,    
-                        similarity_top_k= config['similarity_top_k'], metric="euclidean",
-                        )
-
     prompt_helper = PromptHelper(context_window=32786,) # for Mistral as default is 3900
     response_synthesizer = get_response_synthesizer(response_mode="compact", prompt_helper=prompt_helper,
                                     streaming=True,)
-    
     query_engine = index.as_query_engine(llm = llm, response_synthesizer=response_synthesizer, 
                                         similarity_top_k= config['similarity_top_k'],
                                         streaming=True,)
-
-    prompts_dict_old = query_engine.get_prompts()
-    logging.debug("Old prompt: %s", prompts_dict_old)
-
     query_engine.update_prompts(
         {"response_synthesizer:text_qa_template": new_qa_tmpl}
     )
-
-    prompts_dict_new = query_engine.get_prompts()
-    logging.debug("New prompt: %s", prompts_dict_new)
-
+    # prompts_dict_new = query_engine.get_prompts()
+    # logging.debug("New prompt: %s", prompts_dict_new)
     query_list = []
     answers_list = []
     for document_idx in range(num_docs):
+        # Add query for specific document_idx
         query_list.append(ds["train"][document_idx]["question"]["text"])
+        # Add list of possible answers specific to document_idx
         cur_query_ans_list = [answer["text"] for answer in ds["train"][document_idx]["answers"]]
         answers_list.append(cur_query_ans_list)
 
@@ -179,19 +144,19 @@ def main():
         for text in response.response_gen:
             response_txt += text
         end = time.time()
-        logging.info(f"Response was {response_txt}")
-        logging.info(f"Time taken: {end - start} seconds")
-        logging.info(f"TTFT: {ttft} seconds")
+        # logging.info(f"Response was {response_txt}")
+        # logging.info(f"Time taken: {end - start} seconds")
+        # logging.info(f"TTFT: {ttft} seconds")
 
         total_ttft += ttft
         total_valid_queries += (ttft > 0)
 
         with open('outputs/narrative_qa.csv', 'a') as f:
-            ground_truth = answers_list[idx]
+            ground_truths = answers_list[idx]
             response_txt = parser_answer(str(response_txt))
-            score = max(F1scorer.compute_f1(response_txt, answer) for answer in answers_list[idx])
+            score = max(F1scorer.compute_f1(response_txt, ground_truth) for ground_truth in ground_truths)
             scores.append(score)
-            f.write(f"{response_txt};{ground_truth};{end-start};{score}\n")
+            f.write(f"{response_txt};{ground_truths};{end-start};{score}\n")
         time.sleep(time_interval)
 
     # logging.info("Done")
