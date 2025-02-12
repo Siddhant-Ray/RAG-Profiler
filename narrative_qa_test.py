@@ -73,7 +73,7 @@ def parser_answer(text):
     text = text.split('\n')[-1]
     # Keep only text after "Answer: "
     text = re.sub(r'Answer: ', '', text).strip()
-    return text    
+    return text
 
 def get_ttft_from_query_engine(query_engine, query):
     start_time = time.time()
@@ -90,20 +90,41 @@ def get_ttft_from_query_engine(query_engine, query):
     return ttft
     
 def main():
+    # We use the dataset to grab queries and answers, but context is stored through the persisted index
+    num_queries = config["num_queries"]
     ds = load_dataset("deepmind/narrativeqa", cache_dir = config["cache_dir"])
-    num_docs = config["num_docs"]
+    if not os.path.exists("./storage_qa"):
+        # Assemble the documents; note that some models will be limited in num_docs context
+        documents = []
+        seen_doc_ids = set()
+        for query_idx in range(num_queries):
+            if ds["train"][query_idx]["document"]["id"] not in seen_doc_ids:
+                document_txt = requests.get(ds["train"][query_idx]["document"]["url"]).text
+                documents.append(Document(text = document_txt))
+                seen_doc_ids.add(ds["train"][query_idx]["document"]["id"])
 
-    documents = []
-    for document_idx in range(num_docs):
-        document_txt = requests.get(ds["train"][document_idx]["document"]["url"]).text
-        documents.append(Document(text = document_txt))
+        logging.info("Loaded %d documents", len(documents))
+        os.makedirs("./storage_qa")
+        vector_store = FaissVectorStore(faiss_index=faiss_index)
+        storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
-    logging.info("Loaded %d documents", len(documents))
-    vector_store = FaissVectorStore(faiss_index=faiss_index)
-    storage_context = StorageContext.from_defaults(vector_store=vector_store)
-    index = VectorStoreIndex.from_documents(
+        index = VectorStoreIndex.from_documents(
             documents, storage_context=storage_context, metric="euclidean",
         )
+        logging.info("Index built")
+
+        index.storage_context.persist(persist_dir = "./storage_qa/persist_dir")
+    
+    else:
+        vector_store = FaissVectorStore.from_persist_dir("./storage_qa/persist_dir")
+        storage_context = StorageContext.from_defaults(
+            vector_store=vector_store, persist_dir="./storage_qa/persist_dir", 
+        )
+        index = load_index_from_storage(storage_context=storage_context,    
+                        similarity_top_k= config['similarity_top_k'], metric="euclidean",
+                        )
+        logging.info("Persisted index")
+        
     prompt_helper = PromptHelper(context_window=32786,) # for Mistral as default is 3900
     response_synthesizer = get_response_synthesizer(response_mode="compact", prompt_helper=prompt_helper,
                                     streaming=True,)
@@ -113,33 +134,27 @@ def main():
     query_engine.update_prompts(
         {"response_synthesizer:text_qa_template": new_qa_tmpl}
     )
-    # prompts_dict_new = query_engine.get_prompts()
-    # logging.debug("New prompt: %s", prompts_dict_new)
+
     query_list = []
     answers_list = []
-    for document_idx in range(num_docs):
-        # Add query for specific document_idx
-        query_list.append(ds["train"][document_idx]["question"]["text"])
-        # Add list of possible answers specific to document_idx
-        cur_query_ans_list = [answer["text"] for answer in ds["train"][document_idx]["answers"]]
+    for query_idx in range(num_queries):
+        query_list.append(ds["train"][query_idx]["question"]["text"])
+        cur_query_ans_list = [answer["text"] for answer in ds["train"][query_idx]["answers"]]
         answers_list.append(cur_query_ans_list)
 
-    assert len(query_list) == len(answers_list)
-
     lambda_poisson = 20
-    num_events = len(query_list)
 
     total_ttft = 0
     total_valid_queries = 0
     F1scorer = Scorer(metric='f1')
     scores = []
 
-    for idx, event in enumerate(range(num_events)):
+    for query_idx in range(num_queries):
         time_interval = np.random.exponential(1 / lambda_poisson) 
         # Get ttft separately, may be zero if no ttft found
-        ttft = get_ttft_from_query_engine(query_engine, query_list[idx])
+        ttft = get_ttft_from_query_engine(query_engine, query_list[query_idx])
         start = time.time()
-        response = query_engine.query(query_list[idx])
+        response = query_engine.query(query_list[query_idx])
         response_txt = ""
         for text in response.response_gen:
             response_txt += text
@@ -152,34 +167,15 @@ def main():
         total_valid_queries += (ttft > 0)
 
         with open('outputs/narrative_qa.csv', 'a') as f:
-            ground_truths = answers_list[idx]
+            ground_truths = answers_list[query_idx]
             response_txt = parser_answer(str(response_txt))
             score = max(F1scorer.compute_f1(response_txt, ground_truth) for ground_truth in ground_truths)
             scores.append(score)
             f.write(f"{response_txt};{ground_truths};{end-start};{score}\n")
         time.sleep(time_interval)
-
-    # logging.info("Done")
-    # F1scorer = Scorer(metric='f1')
-
-    # df = pd.read_csv('outputs/narrative_qa.csv', sep=';', header=None)
-    # df.columns = ['response', 'answer', 'time', 'score']
-
-    # gt = df['answer'].values
-    # pred = df['response'].values
-
-    # assert len(gt) == len(pred) and len(gt) == len(query_list)
-
-    # scores = []
-    # for i in range(len(gt)):
-    #     score = max(F1scorer.compute_f1(pred[i], answer) for answer in answers_list[i])
-    #     logging.info(f"pred[i] was {pred[i]} for answers {answers_list[i]}, yielding score {score}")
-    #     # score = F1scorer.compute_f1(pred[i], gt[i])
-    #     scores.append(score)
     
     logging.info(f"F1 Score: {np.mean(scores)}")
     logging.info(f"Average TTFT: {total_ttft / total_valid_queries}")
-    # logging.info(f"count was {count}")
 
 if __name__ == '__main__':
     main()
