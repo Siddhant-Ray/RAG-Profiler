@@ -170,6 +170,11 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# configs
+configs/central.yaml
+.env
+
 # Shell scripts
 /run_server.sh
 /run_client.sh
+/run_server_openai.sh
