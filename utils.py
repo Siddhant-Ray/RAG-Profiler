@@ -2,6 +2,16 @@ import pandas as pd
 import numpy as np
 import argparse
 from rouge_score import rouge_scorer
+# from transformers import AutoTokenizer
+import tiktoken
+import time
+import logging, sys
+
+# GPT tokenizer used temporarily for now
+tokenizer = tiktoken.get_encoding("cl100k_base")
+
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 
 class Scorer:
     def __init__(self, metric="f1"):
@@ -65,6 +75,7 @@ class Scorer:
 
 def compute_score(metric, answer, ground_truth):
     """Compute the score for the given metric."""
+    F1Scorer = Scorer(metric='f1')
     if metric == "rouge":
         scorer = rouge_scorer.RougeScorer(['rouge1'], use_stemmer=True)
     elif metric == "f1":
@@ -91,3 +102,38 @@ def compute_score(metric, answer, ground_truth):
             score = scorer.compute_accuracy(answer[i], ground_truth[i])
             scores.append(score)
     return scores
+
+def parser_answer(text):
+    import re
+    # Keep only the last line 
+    text = text.split('\n')[-1]
+    # Keep only text after "Answer: "
+    text = re.sub(r'Answer: ', '', text).strip()
+    return text
+
+def print_chunk_token_counts(response):
+    """Prints token counts for each retrieved chunk."""
+    for idx, node in enumerate(response.source_nodes):
+        chunk_text = node.text
+        token_count = len(tokenizer.encode(chunk_text))
+        logging.info(f"Chunk {idx + 1}: {token_count} tokens")
+
+def print_total_input_token_count(response, template_str, query):
+    query_tokens = len(tokenizer.encode(query))
+    context_tokens = sum(len(tokenizer.encode(node.text)) for node in response.source_nodes)
+    template_tokens = len(tokenizer.encode(template_str))
+    logging.info(f"total token input is {query_tokens + context_tokens + template_tokens}")
+
+def get_ttft_from_query_engine(query_engine, query):
+    start_time = time.time()
+    # Variable to store the time of the first token
+    first_token_time = None
+    # Execute the query and process the output stream
+    response = query_engine.query(query)
+    for token in response.response_gen:
+        # Check if the token is not empty
+        if token.strip() and first_token_time is None:
+            first_token_time = time.time()  # Capture time of the first token
+    # Calculate TTFT
+    ttft = first_token_time - start_time if first_token_time else 0
+    return ttft

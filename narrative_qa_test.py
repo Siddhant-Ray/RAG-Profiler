@@ -1,6 +1,7 @@
 import logging
 import sys, json, os
 import pathlib
+import utils
 import yaml
 import time
 from datasets import load_dataset
@@ -11,7 +12,6 @@ import pandas as pd, numpy as np
 from llama_index.core import PromptHelper
 from llama_index.vector_stores.faiss import FaissVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-# Set the model to use
 from llama_index.core import Settings
 from llama_index.llms.vllm import Vllm
 from utils import Scorer
@@ -30,20 +30,28 @@ from llama_index.core import (
     PromptTemplate,
     Document
 )
+# from transformers import AutoTokenizer
+import tiktoken
+
+# GPT tokenizer used temporarily for now
+tokenizer = tiktoken.get_encoding("cl100k_base")
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logging.getLogger().addHandler(logging.StreamHandler(stream=sys.stdout))
 login(os.environ["HF_TOKEN"])
-# Test yaml
+
+# HF Tokenizer NOT WORKING currently; gated repo
+# tokenizer = AutoTokenizer.from_pretrained(
+#     "mistralai/Mistral-7B-Instruct-v0.1",
+# )
 
 # Refactor later
 config_path = "configs/central.yaml"
 with open(config_path, "r") as f:
     config = yaml.safe_load(f)
 
-# dimensions of "all-MiniLM-L6-v2"
-d = config['embedding_dim']
-faiss_index = faiss.IndexFlatL2(d)
+# Create faiss index
+faiss_index = faiss.IndexFlatL2(config['embedding_dim'])
 llm = OpenAILike(model="mistralai/Mistral-7B-Instruct-v0.3", 
             api_base=f"http://localhost:{config['port']}/v1", api_key="fake")
 
@@ -66,28 +74,6 @@ new_qa_tmpl_str = (
     "Answer: "
 )
 new_qa_tmpl = PromptTemplate(new_qa_tmpl_str)
-
-def parser_answer(text):
-    import re
-    # Keep only the last line 
-    text = text.split('\n')[-1]
-    # Keep only text after "Answer: "
-    text = re.sub(r'Answer: ', '', text).strip()
-    return text
-
-def get_ttft_from_query_engine(query_engine, query):
-    start_time = time.time()
-    # Variable to store the time of the first token
-    first_token_time = None
-    # Execute the query and process the output stream
-    response = query_engine.query(query)
-    for token in response.response_gen:
-        # Check if the token is not empty
-        if token.strip() and first_token_time is None:
-            first_token_time = time.time()  # Capture time of the first token
-    # Calculate TTFT
-    ttft = first_token_time - start_time if first_token_time else 0
-    return ttft
     
 def main():
     # We use the dataset to grab queries and answers, but context is stored through the persisted index
@@ -135,47 +121,50 @@ def main():
         {"response_synthesizer:text_qa_template": new_qa_tmpl}
     )
 
-    query_list = []
-    answers_list = []
+    query_list, answers_list = [], []
+
+    # Amass queries and answers (list of lists)
     for query_idx in range(num_queries):
         query_list.append(ds["train"][query_idx]["question"]["text"])
         cur_query_ans_list = [answer["text"] for answer in ds["train"][query_idx]["answers"]]
         answers_list.append(cur_query_ans_list)
 
-    lambda_poisson = 20
-
-    total_ttft = 0
-    total_valid_queries = 0
+    scores_list, ttft_list, total_response_time_list = [], [], []
     F1scorer = Scorer(metric='f1')
-    scores = []
 
-    for query_idx in range(num_queries):
-        time_interval = np.random.exponential(1 / lambda_poisson) 
-        # Get ttft separately, may be zero if no ttft found
-        ttft = get_ttft_from_query_engine(query_engine, query_list[query_idx])
-        start = time.time()
-        response = query_engine.query(query_list[query_idx])
-        response_txt = ""
-        for text in response.response_gen:
-            response_txt += text
-        end = time.time()
-        # logging.info(f"Response was {response_txt}")
-        # logging.info(f"Time taken: {end - start} seconds")
-        # logging.info(f"TTFT: {ttft} seconds")
+    with open('outputs/narrative_qa.csv', 'a') as f:
+        for query_idx in range(num_queries):
+            # Get ttft separately, may be zero if no ttft found
+            ttft = utils.get_ttft_from_query_engine(query_engine, query_list[query_idx])
+            # ttft = 1
 
-        total_ttft += ttft
-        total_valid_queries += (ttft > 0)
+            # Time the total response
+            start = time.time()
+            response = query_engine.query(query_list[query_idx])
+            response_txt = ""
+            for text in response.response_gen:
+                response_txt += text
+            end = time.time()
 
-        with open('outputs/narrative_qa.csv', 'a') as f:
-            ground_truths = answers_list[query_idx]
-            response_txt = parser_answer(str(response_txt))
-            score = max(F1scorer.compute_f1(response_txt, ground_truth) for ground_truth in ground_truths)
-            scores.append(score)
-            f.write(f"{response_txt};{ground_truths};{end-start};{score}\n")
-        time.sleep(time_interval)
+            # Print out the token counts for the input chunks
+            # utils.print_chunk_token_counts(response)
+            utils.print_total_input_token_count(response, new_qa_tmpl_str, query_list[query_idx])
+
+            response_txt = utils.parser_answer(str(response_txt))
+            # Here, answer_list[query_idx] is a list of ground truths
+            score = max(F1scorer.compute_f1(response_txt, ground_truth) for ground_truth in answers_list[query_idx])
+            
+            # Track metrics
+            scores_list.append(score)
+            ttft_list.append(ttft)
+            total_response_time_list.append(end - start)
+
+            # Write the response, truths, total time and F1 score to the csv
+            f.write(f"{response_txt};{answers_list[query_idx]};{end-start};{score}\n")
     
-    logging.info(f"F1 Score: {np.mean(scores)}")
-    logging.info(f"Average TTFT: {total_ttft / total_valid_queries}")
+    logging.info(f"F1 Score: {np.mean(scores_list)}")
+    logging.info(f"Average TTFT: {np.mean(ttft_list)}")
+    logging.info(f'Average total response time: {np.mean(total_response_time_list)}')
 
 if __name__ == '__main__':
     main()
